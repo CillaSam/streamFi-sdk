@@ -241,3 +241,83 @@ export function resetCircuit(scope: string): void {
 export function getAllCircuitStates(): CircuitStatus[] {
   return Array.from(circuits.values()).map(({ scope: _, ...rest }) => rest);
 }
+
+/** Thrown by {@link RpcCircuitBreaker.execute} when a call exceeds its timeout. */
+export class RpcTimeoutError extends Error {
+  constructor(scope: string, timeoutMs: number) {
+    super(`RPC ${scope} timed out after ${timeoutMs}ms`);
+    this.name = 'RpcTimeoutError';
+  }
+}
+
+export interface RpcCircuitBreakerOptions {
+  /** Consecutive timeouts before the circuit opens. Default: 3. */
+  failureThreshold?: number;
+  /** How long the circuit stays open before a half-open probe. Default: 30000. */
+  cooldownMs?: number;
+}
+
+const DEFAULT_TIMEOUT_THRESHOLD = 3;
+const DEFAULT_TIMEOUT_COOLDOWN_MS = 30_000;
+
+/**
+ * Circuit breaker for one RPC endpoint that counts consecutive timeouts.
+ *
+ * Opens after `failureThreshold` consecutive timeouts, so calls fail fast
+ * instead of each hanging for the full timeout. After `cooldownMs` the
+ * circuit goes half-open and lets one probe through. Any response that is not
+ * a timeout (a success or an ordinary error) counts as the endpoint being
+ * reachable and closes the circuit.
+ *
+ * @example
+ * const breaker = new RpcCircuitBreaker(rpcUrl);
+ * const info = await breaker.execute(() => server.getLedgerEntries(key), 5_000);
+ */
+export class RpcCircuitBreaker {
+  private readonly threshold: number;
+  private readonly cooldownMs: number;
+
+  constructor(
+    private readonly scope: string,
+    options: RpcCircuitBreakerOptions = {},
+  ) {
+    this.threshold = options.failureThreshold ?? DEFAULT_TIMEOUT_THRESHOLD;
+    this.cooldownMs = options.cooldownMs ?? DEFAULT_TIMEOUT_COOLDOWN_MS;
+  }
+
+  /** Current circuit state for this endpoint. */
+  get state(): CircuitStatus {
+    return getCircuitState(this.scope);
+  }
+
+  /**
+   * Run `fn` under the circuit. Throws immediately while the circuit is open.
+   * If `fn` does not settle within `timeoutMs`, rejects with
+   * {@link RpcTimeoutError} and counts a failure.
+   */
+  async execute<T>(fn: () => Promise<T>, timeoutMs: number): Promise<T> {
+    if (getCircuitState(this.scope).state === 'open') {
+      throw new Error(`RPC circuit open for ${this.scope}`);
+    }
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new RpcTimeoutError(this.scope, timeoutMs)), timeoutMs);
+    });
+
+    try {
+      const result = await Promise.race([fn(), timeout]);
+      recordSuccess(this.scope);
+      return result;
+    } catch (error) {
+      if (error instanceof RpcTimeoutError) {
+        recordFailure(this.scope, { threshold: this.threshold, cooldownMs: this.cooldownMs });
+      } else {
+        recordSuccess(this.scope);
+      }
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+}

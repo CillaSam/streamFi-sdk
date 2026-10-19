@@ -17,6 +17,16 @@ export interface MemoCacheMetrics {
   measuredSpeedupPercent: number | null;
 }
 
+export interface LruMemoCacheOptions {
+  /** Entries kept before the least-recently-used one is evicted. */
+  maxEntries: number;
+  /**
+   * Default time-to-live in milliseconds for `set()` calls that pass no
+   * `ttlMs`. Omit for entries that never expire by default.
+   */
+  ttlMs?: number;
+}
+
 export class LruMemoCache<K, V> {
   private readonly store = new Map<K, V>();
   /** Absolute expiry (epoch ms) for entries stored with a `ttlMs`. */
@@ -25,8 +35,21 @@ export class LruMemoCache<K, V> {
   private cacheMisses = 0;
   private hitExecutionTimeMs = 0;
   private missExecutionTimeMs = 0;
+  private readonly maxSize: number;
+  private readonly defaultTtlMs: number | undefined;
 
-  constructor(private readonly maxSize: number) {}
+  /**
+   * Accepts either a bare max entry count (the original form) or
+   * {@link LruMemoCacheOptions}.
+   */
+  constructor(options: number | LruMemoCacheOptions) {
+    const resolved = typeof options === 'number' ? { maxEntries: options } : options;
+    this.maxSize = resolved.maxEntries;
+    this.defaultTtlMs = resolved.ttlMs;
+    if (this.defaultTtlMs !== undefined && (!Number.isFinite(this.defaultTtlMs) || this.defaultTtlMs <= 0)) {
+      throw new RangeError('LruMemoCache ttlMs must be a positive finite number');
+    }
+  }
 
   get size(): number {
     return this.store.size;
@@ -63,10 +86,11 @@ export class LruMemoCache<K, V> {
    * Insert a key, evicting the least-recently-used entry if at capacity.
    *
    * @param ttlMs Optional time-to-live in milliseconds. Once elapsed the entry
-   *   is no longer returned by `get()`. Omit for an entry that never expires;
-   *   re-setting a key replaces any previous TTL.
+   *   is no longer returned by `get()`. Defaults to the cache's configured
+   *   `ttlMs`; if that is also unset the entry never expires. Re-setting a key
+   *   replaces any previous TTL.
    */
-  set(key: K, value: V, ttlMs?: number): void {
+  set(key: K, value: V, ttlMs: number | undefined = this.defaultTtlMs): void {
     if (ttlMs !== undefined && (!Number.isFinite(ttlMs) || ttlMs <= 0)) {
       throw new RangeError('LruMemoCache ttlMs must be a positive finite number');
     }

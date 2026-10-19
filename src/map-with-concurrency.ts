@@ -21,6 +21,48 @@
  */
 export const DEFAULT_LIST_CONCURRENCY = 8;
 
+/** Tuning for {@link mapWithConcurrency}. Every field is optional. */
+export interface ConcurrencyOptions {
+  /**
+   * Maximum call starts per second, enforced with a token bucket. The bucket
+   * holds up to this many tokens, so a burst of that size goes out at once and
+   * the rest are spaced out. Omit (or pass a non-finite or non-positive value)
+   * for no rate limit.
+   */
+  requestsPerSecond?: number;
+}
+
+interface TokenBucket {
+  tokens: number;
+  capacity: number;
+  rate: number;
+  last: number;
+}
+
+function createTokenBucket(requestsPerSecond: number): TokenBucket {
+  // Capacity is at least 1 so a rate below 1/s can still ever take a token.
+  const capacity = Math.max(1, requestsPerSecond);
+  return { tokens: capacity, capacity, rate: requestsPerSecond, last: Date.now() };
+}
+
+async function takeToken(bucket: TokenBucket): Promise<void> {
+  for (;;) {
+    const now = Date.now();
+    bucket.tokens = Math.min(
+      bucket.capacity,
+      bucket.tokens + ((now - bucket.last) / 1000) * bucket.rate,
+    );
+    bucket.last = now;
+    if (bucket.tokens >= 1) {
+      bucket.tokens -= 1;
+      return;
+    }
+    await new Promise<void>((resolve) =>
+      setTimeout(resolve, ((1 - bucket.tokens) / bucket.rate) * 1000),
+    );
+  }
+}
+
 /**
  * Runs `fn` over `items` with at most `concurrency` in-flight calls.
  * Preserves result ordering to match a naive `Promise.all` fan-out, and
@@ -30,19 +72,27 @@ export const DEFAULT_LIST_CONCURRENCY = 8;
  * A `concurrency` below 1, or one that is not a finite number, is treated
  * as 1 so a caller-supplied option can never silently resolve to no work
  * at all.
+ *
+ * Pass `options.requestsPerSecond` to also cap how fast calls start, for
+ * endpoints that rate-limit bursts even when concurrency is low.
  */
 export async function mapWithConcurrency<T, R>(
   items: T[],
   concurrency: number,
   fn: (item: T) => Promise<R>,
+  options: ConcurrencyOptions = {},
 ): Promise<R[]> {
   const results = new Array<R>(items.length);
   const limit = Math.max(1, Math.trunc(concurrency) || 1);
+  const rps = options.requestsPerSecond;
+  const bucket =
+    rps !== undefined && Number.isFinite(rps) && rps > 0 ? createTokenBucket(rps) : undefined;
   let index = 0;
 
   async function worker() {
     while (index < items.length) {
       const i = index++;
+      if (bucket) await takeToken(bucket);
       results[i] = await fn(items[i]!);
     }
   }
