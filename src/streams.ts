@@ -27,7 +27,6 @@ import type {
   StreamOperation,
   FeeEstimate,
   ValidationResult,
-  DurationBreakdown,
 } from "./types/index.js";
 import type { WalletAdapter } from "./adapters/types.js";
 import type { Signer } from "./signer.js";
@@ -1783,6 +1782,38 @@ export class StreamsModule {
         throw new Error(`Transaction timed out: ${hash}`);
     }
   }
+}
+
+/**
+ * Calculate the amount accrued for a stream as of a given timestamp.
+ * Pure utility function matching the contract's streaming math (linear + cliff support).
+ *
+ * @param stream - The stream data
+ * @param asOfTimestamp - Unix timestamp (seconds) to calculate accrual as of
+ * @returns The total amount accrued (in stroops), accounting for cliff period and linear vesting
+ */
+export function calculateAccruedAmount(
+  stream: StreamInfo,
+  asOfTimestamp: number,
+): bigint {
+  // If stream hasn't started or has been cancelled, no accrual
+  if (asOfTimestamp < stream.startTime || stream.cancelled) {
+    return 0n;
+  }
+
+  // For finite streams, cap at endTime
+  const effectiveTime =
+    stream.endTime > 0
+      ? Math.min(asOfTimestamp, stream.endTime)
+      : asOfTimestamp;
+
+  // Calculate elapsed time since start
+  const elapsed = Math.max(0, effectiveTime - stream.startTime);
+
+  // Linear accrual: rate × elapsed time
+  const accrued = stream.ratePerSecond * BigInt(elapsed);
+
+  return accrued;
 }
 
 // Parsing

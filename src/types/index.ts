@@ -2,6 +2,72 @@ import type { Signer } from "../signer.js";
 
 export type Network = "mainnet" | "testnet" | "local";
 
+// ── Branded Types ───────────────────────────────────────────────────────────
+
+/**
+ * Branded type for stream IDs. Prevents accidentally passing an AccountId or
+ * ContractAddress where a StreamId is expected.
+ */
+export type StreamId = bigint & { readonly __brand: unique symbol };
+
+/**
+ * Branded type for contract addresses (e.g., DripStream or token contracts).
+ * Prevents accidentally passing an AccountId where a ContractAddress is expected.
+ */
+export type ContractAddress = string & { readonly __brand: unique symbol };
+
+/**
+ * Branded type for account/wallet addresses (Stellar public keys).
+ * Prevents accidentally passing a ContractAddress or StreamId where an AccountId is expected.
+ */
+export type AccountId = string & { readonly __brand: unique symbol };
+
+/**
+ * Type guard to check if a value is a valid StreamId (bigint).
+ */
+export function isStreamId(value: unknown): value is StreamId {
+  return typeof value === "bigint";
+}
+
+/**
+ * Type guard to check if a value is a valid ContractAddress (non-empty string).
+ */
+export function isContractAddress(value: unknown): value is ContractAddress {
+  return typeof value === "string" && value.length > 0;
+}
+
+/**
+ * Type guard to check if a value is a valid AccountId (non-empty Stellar address string).
+ */
+export function isAccountId(value: unknown): value is AccountId {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    (value.startsWith("G") || value === "native")
+  );
+}
+
+/**
+ * Helper to cast a bigint to a StreamId. Use only when you are certain the value is a valid stream ID.
+ */
+export function asStreamId(value: bigint): StreamId {
+  return value as StreamId;
+}
+
+/**
+ * Helper to cast a string to a ContractAddress. Use only when you are certain the value is a valid contract address.
+ */
+export function asContractAddress(value: string): ContractAddress {
+  return value as ContractAddress;
+}
+
+/**
+ * Helper to cast a string to an AccountId. Use only when you are certain the value is a valid account ID.
+ */
+export function asAccountId(value: string): AccountId {
+  return value as AccountId;
+}
+
 /**
  * Enumerates the possible lifecycle states of a stream.
  *
