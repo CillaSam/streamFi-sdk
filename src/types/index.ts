@@ -454,3 +454,14 @@ export type StreamOperation =
     }
   | { type: "batchWithdraw"; items?: BatchWithdrawItem[] }
   | { type: string; [key: string]: unknown };
+
+/**
+ * Human-readable breakdown of remaining stream duration.
+ */
+export interface DurationBreakdown {
+  days: number;
+  hours: number;
+  minutes: number;
+  seconds: number;
+  totalSeconds: number;
+}
