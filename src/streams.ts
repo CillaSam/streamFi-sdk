@@ -21,8 +21,10 @@ import type {
   StreamInfo,
   Subscription,
   BatchWithdrawItem,
+  BatchWithdrawPayload,
   BatchWithdrawResult,
   BatchCreateStreamResult,
+  BatchStreamCreationPayload,
   StreamConfig,
   StreamOperation,
   FeeEstimate,
@@ -747,7 +749,7 @@ export class StreamsModule {
    * sequence number.
    */
   async batchWithdraw(
-    withdrawals: BatchWithdrawItem[],
+    withdrawals: BatchWithdrawPayload[],
   ): Promise<BatchWithdrawResult[]> {
     this._ensureCanMutate();
 
@@ -789,7 +791,7 @@ export class StreamsModule {
    * whole batch, not just that config.
    */
   async createBatchStreams(
-    configs: StreamConfig[],
+    configs: BatchStreamCreationPayload[],
   ): Promise<BatchCreateStreamResult[]> {
     this._ensureCanMutate();
     if (!Array.isArray(configs) || configs.length === 0) return [];

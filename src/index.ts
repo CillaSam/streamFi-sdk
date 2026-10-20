@@ -96,11 +96,15 @@ export {
   SUPPORTED_NETWORKS,
   CAIP2_TO_NETWORK,
   UNKNOWN_CONTRACT_ERROR_CODE,
+  parseContractError,
+  ContractError,
 } from "./errors.js";
 export type {
   ConduitContract,
   StreamLifecycleState,
   SorobanDiagnosticInfo,
+  ContractErrorContext,
+  ContractErrorDiagnostic,
 } from "./errors.js";
 export * from "./types/index.js";
 export type {
