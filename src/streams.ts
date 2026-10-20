@@ -279,6 +279,79 @@ export function validateStreamParameters(
   };
 }
 
+/**
+ * Pure function to calculate remaining stream duration as a human-readable breakdown.
+ * Returns days, hours, minutes, seconds, and total seconds remaining.
+ *
+ * @param endTime - Unix timestamp (seconds) when the stream ends
+ * @param now - Unix timestamp (seconds) for the current time
+ * @returns DurationBreakdown with days, hours, minutes, seconds, and totalSeconds
+ */
+export function calculateStreamRemainingDuration(
+  endTime: number,
+  now: number,
+): DurationBreakdown {
+  const remainingSeconds = Math.max(0, endTime - now);
+
+  const days = Math.floor(remainingSeconds / 86400);
+  const hours = Math.floor((remainingSeconds % 86400) / 3600);
+  const minutes = Math.floor((remainingSeconds % 3600) / 60);
+  const seconds = remainingSeconds % 60;
+
+  return {
+    days,
+    hours,
+    minutes,
+    seconds,
+    totalSeconds: remainingSeconds,
+  };
+}
+
+/**
+ * Pure helper function to calculate the withdrawable amount from a stream snapshot.
+ * Accounts for stream state (paused, cancelled), cliff timing, and withdrawn balance.
+ *
+ * This replicates the on-chain contract math, allowing off-chain calculation
+ * of withdrawable amounts without RPC calls (e.g., for frontend pre-checks or
+ * bot analysis).
+ *
+ * @param stream - The stream snapshot (StreamInfo)
+ * @param currentTimestamp - Unix timestamp (seconds) for the current time; defaults to now
+ * @returns The amount available to withdraw, in stroops (bigint)
+ */
+export function calculateWithdrawableAmount(
+  stream: StreamInfo,
+  currentTimestamp: number = Math.floor(Date.now() / 1000),
+): bigint {
+  // Cannot withdraw from cancelled streams
+  if (stream.cancelled) return 0n;
+
+  // Clamp to stream end time first (contract math order).
+  // Once a stream reaches its endTime, it has fully streamed regardless of pause state.
+  const endClamped =
+    stream.endTime > 0 && currentTimestamp > stream.endTime
+      ? stream.endTime
+      : currentTimestamp;
+
+  // If stream is paused, freeze accrual at pausedAt timestamp (but only while stream is running).
+  const effectiveNow =
+    stream.paused && stream.pausedAt < endClamped
+      ? stream.pausedAt
+      : endClamped;
+
+  // Stream hasn't started yet
+  if (effectiveNow < stream.startTime) return 0n;
+
+  // Calculate elapsed time and streamed amount
+  const elapsed = effectiveNow - stream.startTime;
+  if (elapsed <= 0) return 0n;
+
+  const streamed = stream.ratePerSecond * BigInt(elapsed);
+  const available = streamed - stream.withdrawn;
+
+  return available > 0n ? available : 0n;
+}
+
 export class StreamsModule {
   private readonly rpcUrl: string;
   private readonly passphrase: string;
