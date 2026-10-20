@@ -211,9 +211,6 @@ export interface CreateStreamParams {
   ratePerSecond?: string;
 }
 
-/** Configuration for a single stream in a batch creation. */
-export type StreamConfig = CreateStreamParams;
-
 export interface ValidationResult {
   isValid: boolean;
   errors: string[];
@@ -464,11 +461,73 @@ export interface Subscription {
 
 // -- Batch operations ----------------------------------------------------------
 
-export interface BatchWithdrawItem {
+/**
+ * A single stream to create as part of a batch creation.
+ *
+ * This is the strongly typed counterpart of the loosely-shaped objects that
+ * batch creation used to accept: `recipient`, `token` and `depositAmount` are
+ * required, so a missing recipient or a misformatted amount is caught by the
+ * compiler instead of at runtime.
+ *
+ * @example
+ * ```ts
+ * const payloads: BatchStreamCreationPayload[] = [
+ *   { recipient: 'G...', token: 'native', depositAmount: '100' },
+ * ];
+ * await client.streams.createBatchStreams(payloads);
+ * ```
+ */
+export interface BatchStreamCreationPayload {
+  /** Stellar recipient address. */
+  recipient: string;
+  /** 'native' (XLM), 'USDC', or a contract address. */
+  token: string;
+  /** Total deposit in display units (e.g. '1000'). */
+  depositAmount: string;
+  /** Stream duration in seconds (mutually exclusive with `ratePerSecond`). */
+  durationSeconds?: number;
+  /** Override rate in stroops/s (mutually exclusive with `durationSeconds`). */
+  ratePerSecond?: string;
+  /** Unix timestamp; defaults to current ledger time. */
+  startTime?: number;
+  /** Optional stop/end time (Unix timestamp). */
+  stopTime?: number;
+  /** Optional stop/end time alias (Unix timestamp). */
+  endTime?: number;
+  /** Optional sender address. */
+  sender?: string;
+  /** Whether the sender can claw back unstreamed tokens. */
+  clawbackEnabled?: boolean;
+}
+
+/**
+ * A single withdrawal to perform as part of a batch withdraw.
+ *
+ * `streamId` is required, so a batch can no longer contain an entry that
+ * silently targets nothing.
+ *
+ * @example
+ * ```ts
+ * const payloads: BatchWithdrawPayload[] = [{ streamId: 1n }];
+ * await client.streams.batchWithdraw(payloads);
+ * ```
+ */
+export interface BatchWithdrawPayload {
+  /** The stream to withdraw from. */
   streamId: bigint | string;
   /** Amount in stroops. Defaults to the full withdrawable balance if omitted. */
   amount?: bigint;
 }
+
+/**
+ * Configuration for a single stream in a batch creation.
+ *
+ * Alias of {@link BatchStreamCreationPayload}, kept for backwards
+ * compatibility with existing callers.
+ */
+export type StreamConfig = BatchStreamCreationPayload;
+
+export interface BatchWithdrawItem extends BatchWithdrawPayload {}
 
 export interface BatchWithdrawResult {
   streamId: bigint;

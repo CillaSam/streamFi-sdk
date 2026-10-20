@@ -1320,3 +1320,246 @@ export function isRecoverableError(err: unknown): boolean {
   }
   return false;
 }
+
+// ── Contract error parsing ────────────────────────────────────────────────────
+
+/**
+ * A human-readable diagnostic for a contract error code, keyed by the contract
+ * that raised it. Used by {@link parseContractError} to describe codes that
+ * cannot be mapped to a dedicated error class.
+ */
+export interface ContractErrorDiagnostic {
+  /** The contract that raised the error. */
+  contract: ConduitContract;
+  /** The numeric contract error code. */
+  code: number;
+  /** The human-readable message for `code` on `contract`. */
+  message: string;
+}
+
+/**
+ * Extra context used to build the richer typed error classes.
+ *
+ * The dedicated error classes for some stream codes carry details that cannot
+ * be recovered from the numeric code alone (the stream ID, the attempted
+ * operation, the rejected caller). When this context is not supplied,
+ * {@link parseContractError} falls back to a {@link ConduitError} — which
+ * still carries the correct contract-scoped message — rather than inventing
+ * placeholder values.
+ */
+export interface ContractErrorContext {
+  /** The stream ID the failing call was operating on. */
+  streamId?: bigint | string;
+  /** The lifecycle operation that was attempted, e.g. `"withdraw"`. */
+  operation?: string;
+  /** The address that was rejected by the contract's auth check. */
+  caller?: string;
+}
+
+/**
+ * Error raised for a contract error code that could be parsed but does not map
+ * to one of the dedicated typed errors — either because the code has no
+ * dedicated class, or because the contract it belongs to could not be
+ * determined unambiguously.
+ *
+ * Carries the parsed code (and diagnostic, when the contract is known) so
+ * callers can still surface a meaningful message.
+ *
+ * @example
+ * ```ts
+ * try {
+ *   await client.streams.withdraw(streamId);
+ * } catch (err) {
+ *   const parsed = parseContractError(err, 'stream');
+ *   if (parsed instanceof ContractError) {
+ *     console.error(`Contract error #${parsed.code}: ${parsed.message}`);
+ *   }
+ * }
+ * ```
+ */
+export class ContractError extends Error {
+  /** The contract that raised the error, when it could be determined. */
+  readonly contract: ConduitContract | undefined;
+  /** The numeric contract error code, when one could be extracted. */
+  readonly code: number | undefined;
+  /** The parsed diagnostic, when the code could be resolved to a contract. */
+  readonly diagnostic: ContractErrorDiagnostic | undefined;
+
+  constructor(
+    message: string,
+    contract?: ConduitContract,
+    code?: number,
+    diagnostic?: ContractErrorDiagnostic,
+  ) {
+    super(message);
+    this.name = 'ContractError';
+    this.contract = contract;
+    this.code = code;
+    this.diagnostic = diagnostic;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/**
+ * Extracts a numeric contract error code from a raw error value.
+ *
+ * Recognises the shapes a Soroban contract error takes on the wire:
+ * - `Error(Contract, #12)` embedded in an error message (the host error format);
+ * - an object carrying a numeric `code` property (e.g. an `xdr.ScError`);
+ * - an `Error` whose `cause` chain contains either of the above.
+ *
+ * Returns `undefined` when no contract error code can be found.
+ *
+ * @internal
+ */
+function extractContractErrorCode(error: unknown): number | undefined {
+  let current: unknown = error;
+  for (let depth = 0; depth < 5 && current != null; depth++) {
+    if (typeof current === 'object') {
+      const code = (current as { code?: unknown }).code;
+      if (typeof code === 'number' && Number.isInteger(code) && code > 0) {
+        return code;
+      }
+    }
+    if (typeof current === 'string') {
+      const match = /Error\(Contract,\s*#(\d+)\)/.exec(current);
+      if (match?.[1]) return Number(match[1]);
+    }
+    if (current instanceof Error) {
+      const match = /Error\(Contract,\s*#(\d+)\)/.exec(current.message);
+      if (match?.[1]) return Number(match[1]);
+    }
+    current = (current as { cause?: unknown }).cause;
+  }
+  return undefined;
+}
+
+/**
+ * Returns the contracts whose error catalogue defines `code`.
+ *
+ * Because error numbers are contract-scoped, the same numeric code can mean
+ * different things on different contracts (e.g. code 1 is `NotAuthorized` on
+ * DripStream/DripGovernor but `NotInitialized` on DripFactory). When more than
+ * one contract defines a code, the code alone cannot identify the contract.
+ *
+ * @internal
+ */
+function contractsDefiningCode(code: number): ConduitContract[] {
+  return (Object.keys(MESSAGES_BY_CONTRACT) as ConduitContract[]).filter(
+    (contract) => code in MESSAGES_BY_CONTRACT[contract],
+  );
+}
+
+/**
+ * Parses an arbitrary error into a typed contract error.
+ *
+ * Soroban host errors surface as raw integers (e.g. `Error(Contract, #12)`),
+ * which makes them hard to diagnose. This function extracts the numeric
+ * contract error code from an unknown value and maps it to the matching typed
+ * error class — {@link StreamNotFoundError}, {@link UnauthorizedStreamActionError},
+ * {@link InvalidStreamStateError}, {@link ClawbackNotEnabledError},
+ * {@link RateExceedsMaxError}, {@link DurationTooShortError},
+ * {@link BackdatedStreamError}, {@link GovernorInvalidParamError} — or to a
+ * {@link ConduitError} carrying the contract-scoped message.
+ *
+ * Error numbers are contract-scoped, so the `contract` argument tells the
+ * parser which catalogue to read. When it is omitted, the parser only resolves
+ * the code automatically if exactly one contract defines it; otherwise it
+ * returns a {@link ContractError} listing the candidates instead of guessing
+ * and reporting the wrong meaning.
+ *
+ * Errors that do not carry a contract error code (network failures, timeouts,
+ * user cancellations) are returned unchanged, so this is safe to call in a
+ * catch block.
+ *
+ * @param error - The raw error value to parse.
+ * @param contract - The contract the error came from, when known.
+ * @param context - Optional details used to build the richer typed errors.
+ * @returns A typed contract error, or the original error when it carries no
+ *          contract error code.
+ *
+ * @example
+ * ```ts
+ * try {
+ *   await client.streams.withdraw(streamId);
+ * } catch (err) {
+ *   const parsed = parseContractError(err, 'stream', { streamId, operation: 'withdraw' });
+ *   if (parsed instanceof ClawbackNotEnabledError) {
+ *     console.error('Clawback was not enabled for this stream.');
+ *   } else if (parsed instanceof ContractError) {
+ *     console.error(`Contract error #${parsed.code}: ${parsed.message}`);
+ *   }
+ * }
+ * ```
+ */
+export function parseContractError(
+  error: unknown,
+  contract?: ConduitContract,
+  context: ContractErrorContext = {},
+): Error {
+  // Already a typed contract error — nothing to parse.
+  if (error instanceof ConduitError) return error;
+
+  const code = extractContractErrorCode(error);
+  if (code === undefined) {
+    // Not a contract error (network failure, timeout, user abort, …).
+    return error instanceof Error ? error : new Error(String(error));
+  }
+
+  // Determine which contract's catalogue to read.
+  let scope: ConduitContract;
+  if (contract) {
+    scope = contract;
+  } else {
+    const candidates = contractsDefiningCode(code);
+    if (candidates.length !== 1) {
+      const options = candidates
+        .map((c) => `${c} #${code} (${MESSAGES_BY_CONTRACT[c][code]})`)
+        .join(', ');
+      return new ContractError(
+        candidates.length === 0
+          ? `Unknown contract error code #${code}.`
+          : `Contract error code #${code} is ambiguous — it is defined by more than one contract: ${options}. Pass the contract to disambiguate.`,
+        undefined,
+        code,
+      );
+    }
+    scope = candidates[0] as ConduitContract;
+  }
+
+  if (!(code in MESSAGES_BY_CONTRACT[scope])) {
+    return new ContractError(
+      `Unknown ${scope} contract error code #${code}.`,
+      scope,
+      code,
+    );
+  }
+
+  // Map to the dedicated typed error class where one exists.
+  switch (scope) {
+    case 'governor':
+      if (code === GovernorErrorCode.InvalidParam) {
+        return new GovernorInvalidParamError();
+      }
+      break;
+    case 'factory':
+      if (code === FactoryErrorCode.RateExceedsMax) return new RateExceedsMaxError();
+      if (code === FactoryErrorCode.DurationTooShort) return new DurationTooShortError();
+      if (code === FactoryErrorCode.BackdatedStream) return new BackdatedStreamError();
+      break;
+    case 'stream':
+      if (code === StreamErrorCode.ClawbackDisabled) return new ClawbackNotEnabledError();
+      if (code === StreamErrorCode.NotAuthorized && context.operation && context.caller) {
+        return new UnauthorizedStreamActionError(context.operation, context.caller);
+      }
+      if (code === StreamErrorCode.StreamNotFound && context.streamId !== undefined) {
+        return new StreamNotFoundError(context.streamId);
+      }
+      if (code in STATE_BY_CODE && context.operation) {
+        return new InvalidStreamStateError(context.operation, code as StreamErrorCode);
+      }
+      break;
+  }
+
+  return new ConduitError(scope, code);
+}
