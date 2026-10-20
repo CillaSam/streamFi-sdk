@@ -15,6 +15,8 @@ import type {
   ResumeEvent,
   StreamTopUpEvent,
   StreamClawbackedEvent,
+  TopUpEvent,
+  ClawbackEvent,
   CreatedEvent,
   ForceCancelEvent,
   RecipientTransferEvent,
@@ -566,11 +568,11 @@ interface StreamHistoryBase {
 export type StreamHistoryEntry = StreamHistoryBase & (
   | { kind: 'created';  event: CreatedEvent }
   | { kind: 'withdraw'; event: WithdrawEvent }
-  | { kind: 'top_up';   event: TopUpEvent }
+  | { kind: 'top_up';   event: StreamTopUpEvent }
   | { kind: 'pause';    event: PauseEvent }
   | { kind: 'resume';   event: ResumeEvent }
   | { kind: 'cancel';   event: CancelEvent }
-  | { kind: 'clawback'; event: ClawbackEvent }
+  | { kind: 'clawback'; event: StreamClawbackedEvent }
 );
 
 export interface StreamHistoryPage {

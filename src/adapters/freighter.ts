@@ -1,5 +1,6 @@
 import { Transaction } from '@stellar/stellar-sdk';
 import type { WalletAdapter, SignTransactionOptions } from './types.js';
+import { NetworkMismatchError } from '../errors.js';
 
 export interface FreighterNetworkDetails {
   network?: string;
@@ -160,6 +161,9 @@ export class FreighterWalletAdapter implements WalletAdapter {
 
   /**
    * Signs a Soroban/Stellar transaction via Freighter extension.
+   *
+   * @throws {NetworkMismatchError} if Freighter's active network passphrase
+   *   differs from the one the transaction is being signed for.
    */
   async signTransaction(
     tx: Transaction | string,
@@ -173,13 +177,23 @@ export class FreighterWalletAdapter implements WalletAdapter {
       passphrase = tx.networkPassphrase;
     }
 
-    if (!passphrase && typeof client.getNetworkDetails === 'function') {
+    // The wallet's active network: used as a fallback passphrase, and to catch
+    // a wallet on Testnet while the client targets Mainnet (or vice versa)
+    // before the user is prompted to sign (#916).
+    let walletPassphrase: string | undefined;
+    if (typeof client.getNetworkDetails === 'function') {
       try {
         const details = await client.getNetworkDetails();
-        passphrase = details?.networkPassphrase;
+        walletPassphrase = details?.networkPassphrase;
       } catch {
-        // Ignore fallback error
+        // Older Freighter versions / restricted contexts: skip the check
       }
+    }
+
+    if (!passphrase) {
+      passphrase = walletPassphrase;
+    } else if (walletPassphrase && walletPassphrase !== passphrase) {
+      throw new NetworkMismatchError(passphrase, walletPassphrase);
     }
 
     if (!passphrase) {

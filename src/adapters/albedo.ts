@@ -1,5 +1,36 @@
 import { Transaction, Networks } from '@stellar/stellar-sdk';
 import type { WalletAdapter, SignTransactionOptions } from './types.js';
+import { AlbedoCancelError } from '../errors.js';
+
+/** Albedo intent error code for "rejected by the user" (includes closing the popup). */
+const ALBEDO_USER_REJECTED_CODE = -4;
+
+/**
+ * True when an Albedo intent rejection means the user closed the popup or
+ * declined, rather than a genuine wallet/transaction failure.
+ */
+function isAlbedoCancellation(err: unknown): boolean {
+  if (!err) return false;
+  const { code, message } = (typeof err === 'object' ? err : { message: String(err) }) as {
+    code?: unknown;
+    message?: unknown;
+  };
+  if (code === ALBEDO_USER_REJECTED_CODE) return true;
+  return typeof message === 'string' && /reject|cancel|closed|denied/i.test(message);
+}
+
+/** Runs an Albedo intent, rethrowing user cancellations as {@link AlbedoCancelError}. */
+async function runIntent<T>(intent: Promise<T>): Promise<T> {
+  try {
+    return await intent;
+  } catch (err) {
+    if (isAlbedoCancellation(err)) {
+      const message = (err as { message?: unknown })?.message;
+      throw new AlbedoCancelError(typeof message === 'string' && message ? message : undefined);
+    }
+    throw err;
+  }
+}
 
 export interface AlbedoPublicKeyResult {
   pubkey: string;
@@ -98,7 +129,7 @@ export class AlbedoWalletAdapter implements WalletAdapter {
       throw new Error('Albedo wallet API does not support publicKey intent.');
     }
 
-    const res = await client.publicKey({ require_existing: true });
+    const res = await runIntent(client.publicKey({ require_existing: true }));
     const key = typeof res === 'string' ? res : res?.pubkey;
 
     if (!key) {
@@ -118,7 +149,7 @@ export class AlbedoWalletAdapter implements WalletAdapter {
       throw new Error('Albedo wallet API does not support publicKey intent.');
     }
 
-    const res = await client.publicKey();
+    const res = await runIntent(client.publicKey());
     const key = typeof res === 'string' ? res : res?.pubkey;
 
     if (!key) {
@@ -138,6 +169,8 @@ export class AlbedoWalletAdapter implements WalletAdapter {
 
   /**
    * Signs a Soroban/Stellar transaction via Albedo tx intent.
+   *
+   * @throws {AlbedoCancelError} if the user closes the Albedo popup or rejects the request.
    */
   async signTransaction(
     tx: Transaction | string,
@@ -171,12 +204,14 @@ export class AlbedoWalletAdapter implements WalletAdapter {
     }
 
     const accountToSign = opts?.accountToSign ?? this.pubKey;
-    const signResult = await client.tx({
-      xdr: xdrString,
-      network: networkParam,
-      submit: false,
-      ...(accountToSign ? { pubkey: accountToSign } : {}),
-    });
+    const signResult = await runIntent(
+      client.tx({
+        xdr: xdrString,
+        network: networkParam,
+        submit: false,
+        ...(accountToSign ? { pubkey: accountToSign } : {}),
+      }),
+    );
 
     let signedXdr: string | undefined;
     if (typeof signResult === 'string') {

@@ -27,6 +27,13 @@ export interface FeeEstimatorOptions {
    * instead of calling `networkFetcher` again. Default: no interval (every call fetches).
    */
   minRefetchIntervalMs?: number;
+  /**
+   * Inclusion-fee buffer multiplier applied to every estimated fee to resist
+   * out-bidding during high-congestion ledger periods. A value of `1` (default)
+   * disables the buffer; e.g. `1.2` adds a 20% safety margin so urgent stream
+   * creations are included without delay. Must be a finite number `>= 1`.
+   */
+  feeMultiplier?: number;
 }
 
 /**
@@ -60,6 +67,7 @@ export class FeeEstimator {
   private readonly horizonUrl: string;
   private readonly fetchImpl: typeof fetch | undefined;
   private readonly priorityMultipliers: Record<FeePriority, number>;
+  private readonly feeMultiplier: number;
 
   /**
    * Creates a new FeeEstimator instance.
@@ -73,6 +81,11 @@ export class FeeEstimator {
     this.horizonUrl = (options?.horizonUrl ?? DEFAULT_HORIZON_URL).replace(/\/+$/, '');
     this.fetchImpl = options?.fetch;
     this.priorityMultipliers = { ...DEFAULT_PRIORITY_MULTIPLIERS, ...options?.priorityMultipliers };
+    const feeMultiplier = options?.feeMultiplier ?? 1;
+    if (!Number.isFinite(feeMultiplier) || feeMultiplier < 1) {
+      throw new Error(`Invalid feeMultiplier: must be a finite number >= 1, got ${String(feeMultiplier)}`);
+    }
+    this.feeMultiplier = feeMultiplier;
   }
 
   /**
@@ -94,7 +107,7 @@ export class FeeEstimator {
       throw new Error(`Invalid fee priority multiplier: ${String(priority)}`);
     }
 
-    return this.estimateFee(async () => {
+    const fee = await this.estimateFee(async () => {
       const doFetch = this.fetchImpl ?? globalThis.fetch;
       const res = await doFetch(`${this.horizonUrl}/fee_stats`);
       if (!res.ok) throw new Error(`Horizon fee_stats request failed: ${res.status}`);
@@ -107,6 +120,19 @@ export class FeeEstimator {
       // Basis-point math keeps the result an exact bigint.
       return (BigInt(raw) * BigInt(Math.round(multiplier * 100)) + 99n) / 100n;
     }, { cacheKey: `dynamic:${String(priority)}`, ...rest });
+
+    return this.applyBuffer(fee);
+  }
+
+  /**
+   * Applies the configured inclusion-fee buffer multiplier (see
+   * {@link FeeEstimatorOptions.feeMultiplier}) to a computed fee so urgent
+   * transactions resist out-bidding during high-congestion ledger periods.
+   * Uses basis-point math to keep the result an exact bigint stroops value.
+   */
+  private applyBuffer(fee: bigint): bigint {
+    if (this.feeMultiplier === 1) return fee;
+    return (fee * BigInt(Math.round(this.feeMultiplier * 100)) + 99n) / 100n;
   }
 
   /**

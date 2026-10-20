@@ -16,6 +16,7 @@ export {
   type WalletConnectAdapterOptions,
   type WalletConnectAppMetadata,
   type WalletConnectSessionChange,
+  type WalletConnectDisconnectEvent,
 } from './walletconnect.js';
 export {
   FreighterWalletAdapter,

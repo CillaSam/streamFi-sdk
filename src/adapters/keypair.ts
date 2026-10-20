@@ -12,7 +12,47 @@ import {
  * Allows secret keys / keypairs to be used seamlessly through the WalletAdapter interface.
  */
 export class KeypairWalletAdapter implements WalletAdapter {
-  constructor(private readonly keypair: Keypair) {}
+  private keypair: Keypair | null;
+  private readonly publicKey: string;
+
+  constructor(keypair: Keypair) {
+    this.keypair = keypair;
+    this.publicKey = keypair.publicKey();
+  }
+
+  /**
+   * Zero the secret key buffers held by the wrapped Keypair and drop the
+   * reference, so the secret does not linger in memory for the lifetime of
+   * the process (serverless / long-lived Node.js workers). The adapter can
+   * still report its public key, but any further signing or export throws.
+   * Idempotent.
+   *
+   * Note: this wipes the Keypair passed to the constructor, so do not reuse
+   * that instance afterwards.
+   */
+  destroy(): void {
+    const keypair = this.keypair;
+    if (!keypair) return;
+    const internals = keypair as unknown as Record<string, unknown>;
+    for (const field of ['_secretKey', '_secretSeed']) {
+      const buf = internals[field];
+      if (buf instanceof Uint8Array) buf.fill(0);
+      internals[field] = undefined;
+    }
+    this.keypair = null;
+  }
+
+  /** True once {@link destroy} has been called. */
+  get isDestroyed(): boolean {
+    return this.keypair === null;
+  }
+
+  private requireKeypair(): Keypair {
+    if (!this.keypair) {
+      throw new Error('KeypairWalletAdapter has been destroyed; its secret key is no longer available.');
+    }
+    return this.keypair;
+  }
 
   /**
    * Rebuild an adapter from a keystore produced by {@link exportKeystore}.
@@ -36,17 +76,18 @@ export class KeypairWalletAdapter implements WalletAdapter {
    * @throws if the wrapped Keypair is public-key only.
    */
   exportKeystore(passphrase: string, opts?: ExportKeystoreOptions): Promise<Keystore> {
-    return encryptKeystore(this.keypair, passphrase, opts);
+    return encryptKeystore(this.requireKeypair(), passphrase, opts);
   }
 
   getPublicKey(): string {
-    return this.keypair.publicKey();
+    return this.publicKey;
   }
 
   async signTransaction(
     tx: Transaction | string,
     _opts?: SignTransactionOptions,
   ): Promise<Transaction | string> {
+    const keypair = this.requireKeypair();
     if (typeof tx === 'string') {
       if (!_opts?.networkPassphrase) {
         throw new Error(
@@ -55,7 +96,7 @@ export class KeypairWalletAdapter implements WalletAdapter {
         );
       }
       const parsedTx = new Transaction(tx, _opts.networkPassphrase);
-      parsedTx.sign(this.keypair);
+      parsedTx.sign(keypair);
       return parsedTx.toXDR();
     }
 
@@ -70,11 +111,11 @@ export class KeypairWalletAdapter implements WalletAdapter {
       );
     }
 
-    tx.sign(this.keypair);
+    tx.sign(keypair);
     return tx;
   }
 
   isConnected(): boolean {
-    return true;
+    return this.keypair !== null;
   }
 }

@@ -57,6 +57,20 @@ export interface WalletConnectAdapterOptions {
    * its session by the time this runs.
    */
   onSessionChange?: (change: WalletConnectSessionChange) => void;
+  /**
+   * Called when the wallet ends the session (`session_delete`, e.g. the user
+   * disconnected from their mobile wallet) or it expires, so the UI can reset
+   * immediately. The adapter's session is already cleared when this runs.
+   * Not called for a local {@link WalletConnectAdapter.disconnect}.
+   */
+  onDisconnect?: (event: WalletConnectDisconnectEvent) => void;
+}
+
+/** Payload passed to `onDisconnect` (#918). */
+export interface WalletConnectDisconnectEvent {
+  reason: 'session_delete' | 'session_expire';
+  /** Topic of the session that ended, when the wallet supplied it. */
+  topic?: string;
 }
 
 /**
@@ -71,6 +85,7 @@ export class WalletConnectAdapter implements WalletAdapter {
   private session: WalletConnectSession | null;
   private readonly connectTimeoutMs: number;
   private readonly onSessionChange: ((change: WalletConnectSessionChange) => void) | undefined;
+  private readonly disconnectListeners = new Set<(event: WalletConnectDisconnectEvent) => void>();
   /** Removes the listeners attached by attachSessionListeners(), if any. */
   private detachListeners: (() => void) | null = null;
   private listenedClient: WalletConnectSignClient | null = null;
@@ -96,6 +111,7 @@ export class WalletConnectAdapter implements WalletAdapter {
     this.session   = (options.session as WalletConnectSession) ?? null;
     this.connectTimeoutMs = options.connectTimeoutMs ?? 30000;
     this.onSessionChange = options.onSessionChange;
+    if (options.onDisconnect) this.disconnectListeners.add(options.onDisconnect);
     if (this.session) this.attachSessionListeners();
   }
 
@@ -141,6 +157,27 @@ export class WalletConnectAdapter implements WalletAdapter {
     this.detachListeners?.();
     this.detachListeners = null;
     this.listenedClient = null;
+  }
+
+  /**
+   * Register a listener for wallet-initiated disconnects (see
+   * {@link WalletConnectAdapterOptions.onDisconnect}). Returns an unsubscribe function.
+   */
+  onDisconnect(listener: (event: WalletConnectDisconnectEvent) => void): () => void {
+    this.disconnectListeners.add(listener);
+    return () => {
+      this.disconnectListeners.delete(listener);
+    };
+  }
+
+  private notifyDisconnect(event: WalletConnectDisconnectEvent): void {
+    for (const listener of this.disconnectListeners) {
+      try {
+        listener(event);
+      } catch (handlerError) {
+        console.warn('[conduit-sdk] WalletConnect onDisconnect handler error:', handlerError);
+      }
+    }
   }
 
   private notifySessionChange(change: WalletConnectSessionChange): void {
@@ -204,16 +241,20 @@ export class WalletConnectAdapter implements WalletAdapter {
     const { topic } = (payload ?? {}) as { topic?: string };
     if (!this.session) return;
     if (topic && this.session.topic && topic !== this.session.topic) return;
+    const endedTopic = topic ?? this.session.topic;
     this.session = null;
     this.notifySessionChange({ type: 'disconnected', publicKey: null });
+    this.notifyDisconnect({ reason: 'session_delete', ...(endedTopic ? { topic: endedTopic } : {}) });
   }
 
   private handleSessionExpire(payload: unknown): void {
     const { topic } = (payload ?? {}) as { topic?: string };
     if (!this.session) return;
     if (topic && this.session.topic && topic !== this.session.topic) return;
+    const endedTopic = topic ?? this.session.topic;
     this.session = null;
     this.notifySessionChange({ type: 'session_expired', publicKey: null });
+    this.notifyDisconnect({ reason: 'session_expire', ...(endedTopic ? { topic: endedTopic } : {}) });
   }
 
   /**

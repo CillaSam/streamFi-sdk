@@ -82,6 +82,9 @@ export function StreamFiProvider({
   children,
   queryClient,
 }: StreamFiProviderProps) {
+  const customFetch = rpcHeaders && Object.keys(rpcHeaders).length > 0
+    ? makeHeaderFetch(rpcHeaders)
+    : undefined;
   const [currentConfig, setCurrentConfig] = useState<ConduitConfig | undefined>(
     () => config ?? (defaultNetwork ? { network: defaultNetwork } : undefined),
   );
@@ -96,7 +99,7 @@ export function StreamFiProvider({
       config ?? (defaultNetwork ? { network: defaultNetwork } : undefined);
     if (initialConfig) {
       try {
-        return { client: new ConduitClient(initialConfig), error: null };
+        return { client: new ConduitClient({ ...initialConfig, ...(customFetch ? { customFetch } : {}) }), error: null };
       } catch (err: unknown) {
         return {
           client: null,
@@ -114,7 +117,7 @@ export function StreamFiProvider({
 
   const connect = useCallback((cfg: ConduitConfig) => {
     try {
-      const newClient = new ConduitClient(cfg);
+      const newClient = new ConduitClient({ ...cfg, ...(customFetch ? { customFetch } : {}) });
       setCurrentConfig(cfg);
       setCurrentNetwork(cfg.network);
       setState({ client: newClient, error: null });
@@ -175,7 +178,7 @@ export function StreamFiProvider({
       setCurrentConfig(nextConfig);
 
       try {
-        const newClient = new ConduitClient(nextConfig);
+        const newClient = new ConduitClient({ ...nextConfig, ...(customFetch ? { customFetch } : {}) });
         setState({ client: newClient, error: null });
       } catch (err: unknown) {
         setState({

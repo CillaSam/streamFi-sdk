@@ -1,6 +1,72 @@
-import type { Signer } from '../signer.js';
+import type { Signer } from "../signer.js";
 
-export type Network = 'mainnet' | 'testnet' | 'local';
+export type Network = "mainnet" | "testnet" | "local";
+
+// ── Branded Types ───────────────────────────────────────────────────────────
+
+/**
+ * Branded type for stream IDs. Prevents accidentally passing an AccountId or
+ * ContractAddress where a StreamId is expected.
+ */
+export type StreamId = bigint & { readonly __brand: unique symbol };
+
+/**
+ * Branded type for contract addresses (e.g., DripStream or token contracts).
+ * Prevents accidentally passing an AccountId where a ContractAddress is expected.
+ */
+export type ContractAddress = string & { readonly __brand: unique symbol };
+
+/**
+ * Branded type for account/wallet addresses (Stellar public keys).
+ * Prevents accidentally passing a ContractAddress or StreamId where an AccountId is expected.
+ */
+export type AccountId = string & { readonly __brand: unique symbol };
+
+/**
+ * Type guard to check if a value is a valid StreamId (bigint).
+ */
+export function isStreamId(value: unknown): value is StreamId {
+  return typeof value === "bigint";
+}
+
+/**
+ * Type guard to check if a value is a valid ContractAddress (non-empty string).
+ */
+export function isContractAddress(value: unknown): value is ContractAddress {
+  return typeof value === "string" && value.length > 0;
+}
+
+/**
+ * Type guard to check if a value is a valid AccountId (non-empty Stellar address string).
+ */
+export function isAccountId(value: unknown): value is AccountId {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    (value.startsWith("G") || value === "native")
+  );
+}
+
+/**
+ * Helper to cast a bigint to a StreamId. Use only when you are certain the value is a valid stream ID.
+ */
+export function asStreamId(value: bigint): StreamId {
+  return value as StreamId;
+}
+
+/**
+ * Helper to cast a string to a ContractAddress. Use only when you are certain the value is a valid contract address.
+ */
+export function asContractAddress(value: string): ContractAddress {
+  return value as ContractAddress;
+}
+
+/**
+ * Helper to cast a string to an AccountId. Use only when you are certain the value is a valid account ID.
+ */
+export function asAccountId(value: string): AccountId {
+  return value as AccountId;
+}
 
 /**
  * Enumerates the possible lifecycle states of a stream.
@@ -11,25 +77,39 @@ export type Network = 'mainnet' | 'testnet' | 'local';
  * - `ENDED`    — stream reached its natural end time.
  */
 export enum StreamState {
-  ACTIVE    = 'ACTIVE',
-  PAUSED    = 'PAUSED',
-  CANCELLED = 'CANCELLED',
-  ENDED     = 'ENDED',
+  ACTIVE = "ACTIVE",
+  PAUSED = "PAUSED",
+  CANCELLED = "CANCELLED",
+  ENDED = "ENDED",
 }
 
 export interface ConduitConfig {
   /** Network to connect to */
   network: Network;
   /** Signing keypair — required for mutating operations */
-  keypair?: import('@stellar/stellar-sdk').Keypair;
+  keypair?: import("@stellar/stellar-sdk").Keypair;
   /** Custom wallet adapter (e.g. WalletConnectAdapter) for browser/mobile wallet signing */
-  wallet?: import('../adapters/types.js').WalletAdapter;
+  wallet?: import("../adapters/types.js").WalletAdapter;
   /** Custom signer plugin (KMS/HSM). Takes precedence over keypair when set. */
   signer?: Signer;
   /** Signing behaviour for wallet adapters and custom signers (e.g. `signatureTimeoutMs`). */
-  signerOptions?: import('../signer.js').SignerOptions;
+  signerOptions?: import("../signer.js").SignerOptions;
   /** Override default Soroban RPC URL */
   rpcUrl?: string;
+  /**
+   * Array of Soroban RPC URLs for fallback failover. When provided, takes
+   * precedence over `rpcUrl`. Endpoints are tried in order, with automatic
+   * failover to the next URL after `rpcUrlFailureThresholdConsecutive`
+   * consecutive timeouts on the current endpoint. Default behavior: round-robin
+   * with fallback on repeated failures.
+   */
+  rpcUrls?: string[];
+  /**
+   * Number of consecutive timeouts before failing over to the next RPC URL
+   * in the `rpcUrls` fallback list. Default 3. Only used when `rpcUrls` is
+   * configured.
+   */
+  rpcUrlFailureThresholdConsecutive?: number;
   /** Override deployed DripFactory contract ID */
   factoryAddress?: string;
   /** Override deployed DripGovernor contract ID */
@@ -77,28 +157,34 @@ export interface ConduitConfig {
    * Indexer (GraphQL) traffic is configured separately on `GraphQLIndexer`.
    */
   customFetch?: typeof fetch;
+  /**
+   * Timeout in milliseconds for each Soroban RPC request sent through
+   * `customFetch`; the request is aborted via `AbortController` once it
+   * elapses. Defaults to 15000. Set to `0` to disable.
+   */
+  requestTimeoutMs?: number;
 }
 
 export interface StreamInfo {
-  id:              bigint;
+  id: bigint;
   /** DripStream contract address */
-  address:         string;
-  sender:          string;
-  recipient:       string;
+  address: string;
+  sender: string;
+  recipient: string;
   /** Token contract address or 'native' */
-  token:           string;
+  token: string;
   /** Tokens released per second, in stroops */
-  ratePerSecond:   bigint;
+  ratePerSecond: bigint;
   /** Unix timestamp */
-  startTime:       number;
+  startTime: number;
   /** Unix timestamp; 0 = open-ended */
-  endTime:         number;
+  endTime: number;
   /** Total withdrawn by recipient so far, in stroops */
-  withdrawn:       bigint;
-  paused:          boolean;
+  withdrawn: bigint;
+  paused: boolean;
   /** Timestamp when stream was last paused; 0 if not paused */
-  pausedAt:        number;
-  cancelled:       boolean;
+  pausedAt: number;
+  cancelled: boolean;
   clawbackEnabled: boolean;
 }
 
@@ -125,9 +211,6 @@ export interface CreateStreamParams {
   ratePerSecond?: string;
 }
 
-/** Configuration for a single stream in a batch creation. */
-export type StreamConfig = CreateStreamParams;
-
 export interface ValidationResult {
   isValid: boolean;
   errors: string[];
@@ -135,31 +218,31 @@ export interface ValidationResult {
 }
 
 export interface CreateStreamResult {
-  streamId:      bigint;
+  streamId: bigint;
   streamAddress: string;
-  txHash:        string;
+  txHash: string;
 }
 
 export interface ListStreamsParams {
-  sender?:    string;
+  sender?: string;
   recipient?: string;
-  offset?:    number;
-  limit?:     number;
+  offset?: number;
+  limit?: number;
   /** Opaque pagination cursor from a previous page's `nextCursor`. Takes precedence over `offset` if both are given. */
-  cursor?:    string;
+  cursor?: string;
 }
 
 export interface PaginatedStreams {
   /** The stream info results for this page */
-  streams:    StreamInfo[];
+  streams: StreamInfo[];
   /** Whether there are more results after this page */
   hasNextPage: boolean;
   /** Number of filtered stream IDs seen through the end of this page */
-  totalCount:  bigint;
+  totalCount: bigint;
   /** The offset used for this page */
-  offset:      number;
+  offset: number;
   /** The limit used for this page */
-  limit:       number;
+  limit: number;
   /** Opaque cursor to pass as `cursor` to fetch the next page. Present only when `hasNextPage` is true. */
   nextCursor?: string;
 }
@@ -177,33 +260,53 @@ export interface BatchGetStreamsOptions extends GetStreamInfosOptions {
 }
 
 export interface GetStreamInfosFailure {
-  id:    bigint;
+  id: bigint;
   error: string;
 }
 
 export interface GetStreamInfosResult {
-  results:  StreamInfo[];
+  results: StreamInfo[];
   failures: GetStreamInfosFailure[];
 }
 
 export interface GovernorConfig {
-  feeBps:              number;
-  feeRecipient?:       string;
-  minDurationSeconds:  number;
-  maxDurationSeconds:  number;
-  maxRatePerSecond:    bigint;
-  factoryAddress?:     string;
-  votingDelay?:        number;
-  votingPeriod?:       number;
-  proposalThreshold?:  bigint;
+  feeBps: number;
+  feeRecipient?: string;
+  minDurationSeconds: number;
+  maxDurationSeconds: number;
+  maxRatePerSecond: bigint;
+  factoryAddress?: string;
+  votingDelay?: number;
+  votingPeriod?: number;
+  proposalThreshold?: bigint;
 }
 
 // ── Events ──────────────────────────────────────────────────────────────────
 
-export interface WithdrawEvent  { amount: bigint; recipient: string; totalWithdrawn: bigint; remaining: bigint; sequence?: bigint; }
-export interface CancelEvent    { refundAmount: bigint; withdrawnSoFar: bigint; sender: string; sequence?: bigint; }
-export interface PauseEvent     { pausedAt: number; withdrawable: bigint; sender: string; sequence?: bigint; }
-export interface ResumeEvent    { resumedAt: number; sender: string; sequence?: bigint; }
+export interface WithdrawEvent {
+  amount: bigint;
+  recipient: string;
+  totalWithdrawn: bigint;
+  remaining: bigint;
+  sequence?: bigint;
+}
+export interface CancelEvent {
+  refundAmount: bigint;
+  withdrawnSoFar: bigint;
+  sender: string;
+  sequence?: bigint;
+}
+export interface PauseEvent {
+  pausedAt: number;
+  withdrawable: bigint;
+  sender: string;
+  sequence?: bigint;
+}
+export interface ResumeEvent {
+  resumedAt: number;
+  sender: string;
+  sequence?: bigint;
+}
 /** Published when the sender tops up a stream (`topped_up` topic). */
 export interface StreamTopUpEvent {
   /** Amount added to the stream's deposit. */
@@ -291,47 +394,47 @@ export interface EventGap {
 
 /** Maps each handler-facing event name to its decoded payload type. */
 export interface EventPayloadMap {
-  withdraw:          WithdrawEvent;
-  cancel:            CancelEvent;
-  pause:             PauseEvent;
-  resume:            ResumeEvent;
-  topUp:             StreamTopUpEvent;
-  clawback:          StreamClawbackedEvent;
-  created:           CreatedEvent;
-  forceCancel:       ForceCancelEvent;
+  withdraw: WithdrawEvent;
+  cancel: CancelEvent;
+  pause: PauseEvent;
+  resume: ResumeEvent;
+  topUp: StreamTopUpEvent;
+  clawback: StreamClawbackedEvent;
+  created: CreatedEvent;
+  forceCancel: ForceCancelEvent;
   recipientTransfer: RecipientTransferEvent;
-  operatorSet:       OperatorSetEvent;
-  operatorRevoke:    OperatorRevokedEvent;
+  operatorSet: OperatorSetEvent;
+  operatorRevoke: OperatorRevokedEvent;
 }
 
 /** Union of every decoded stream event payload. */
 export type StreamEventPayload = EventPayloadMap[keyof EventPayloadMap];
 
 export interface StreamEventHandlers {
-  onWithdraw?: (e: WithdrawEvent)  => void;
-  onCancel?:   (e: CancelEvent)    => void;
-  onPause?:    (e: PauseEvent)     => void;
-  onResume?:   (e: ResumeEvent)    => void;
-  onTopUp?:    (e: StreamTopUpEvent) => void;
+  onWithdraw?: (e: WithdrawEvent) => void;
+  onCancel?: (e: CancelEvent) => void;
+  onPause?: (e: PauseEvent) => void;
+  onResume?: (e: ResumeEvent) => void;
+  onTopUp?: (e: StreamTopUpEvent) => void;
   onClawback?: (e: StreamClawbackedEvent) => void;
   /** Called when the factory deploys a new stream. Optional — most subscribers attach after a stream already exists. */
-  onCreated?:            (e: CreatedEvent)             => void;
+  onCreated?: (e: CreatedEvent) => void;
   /** Called when the recipient force-cancels a paused stream. */
-  onForceCancel?:        (e: ForceCancelEvent)         => void;
+  onForceCancel?: (e: ForceCancelEvent) => void;
   /** Called when the recipient role is transferred to a new address — the current subscriber may have just lost the stream. */
-  onRecipientTransfer?:  (e: RecipientTransferEvent)   => void;
+  onRecipientTransfer?: (e: RecipientTransferEvent) => void;
   /** Called when an operator is delegated on the stream. */
-  onOperatorSet?:        (e: OperatorSetEvent)         => void;
+  onOperatorSet?: (e: OperatorSetEvent) => void;
   /** Called when a delegated operator is revoked. */
-  onOperatorRevoke?:     (e: OperatorRevokedEvent)     => void;
+  onOperatorRevoke?: (e: OperatorRevokedEvent) => void;
   /**
    * Called when an event polling request fails. Polling continues
    * afterward — unless this failure reaches `maxConsecutiveFailures`, in
    * which case this is the last call before the subscription stops.
    */
-  onError?:    (error: Error)      => void;
+  onError?: (error: Error) => void;
   /** Called when a non-contiguous event sequence is observed (missed events across a poll gap or reconnect). */
-  onGap?:      (gap: EventGap)     => void;
+  onGap?: (gap: EventGap) => void;
   /** Polling interval in ms; default 5000 */
   pollInterval?: number;
   /**
@@ -358,11 +461,73 @@ export interface Subscription {
 
 // -- Batch operations ----------------------------------------------------------
 
-export interface BatchWithdrawItem {
+/**
+ * A single stream to create as part of a batch creation.
+ *
+ * This is the strongly typed counterpart of the loosely-shaped objects that
+ * batch creation used to accept: `recipient`, `token` and `depositAmount` are
+ * required, so a missing recipient or a misformatted amount is caught by the
+ * compiler instead of at runtime.
+ *
+ * @example
+ * ```ts
+ * const payloads: BatchStreamCreationPayload[] = [
+ *   { recipient: 'G...', token: 'native', depositAmount: '100' },
+ * ];
+ * await client.streams.createBatchStreams(payloads);
+ * ```
+ */
+export interface BatchStreamCreationPayload {
+  /** Stellar recipient address. */
+  recipient: string;
+  /** 'native' (XLM), 'USDC', or a contract address. */
+  token: string;
+  /** Total deposit in display units (e.g. '1000'). */
+  depositAmount: string;
+  /** Stream duration in seconds (mutually exclusive with `ratePerSecond`). */
+  durationSeconds?: number;
+  /** Override rate in stroops/s (mutually exclusive with `durationSeconds`). */
+  ratePerSecond?: string;
+  /** Unix timestamp; defaults to current ledger time. */
+  startTime?: number;
+  /** Optional stop/end time (Unix timestamp). */
+  stopTime?: number;
+  /** Optional stop/end time alias (Unix timestamp). */
+  endTime?: number;
+  /** Optional sender address. */
+  sender?: string;
+  /** Whether the sender can claw back unstreamed tokens. */
+  clawbackEnabled?: boolean;
+}
+
+/**
+ * A single withdrawal to perform as part of a batch withdraw.
+ *
+ * `streamId` is required, so a batch can no longer contain an entry that
+ * silently targets nothing.
+ *
+ * @example
+ * ```ts
+ * const payloads: BatchWithdrawPayload[] = [{ streamId: 1n }];
+ * await client.streams.batchWithdraw(payloads);
+ * ```
+ */
+export interface BatchWithdrawPayload {
+  /** The stream to withdraw from. */
   streamId: bigint | string;
   /** Amount in stroops. Defaults to the full withdrawable balance if omitted. */
   amount?: bigint;
 }
+
+/**
+ * Configuration for a single stream in a batch creation.
+ *
+ * Alias of {@link BatchStreamCreationPayload}, kept for backwards
+ * compatibility with existing callers.
+ */
+export type StreamConfig = BatchStreamCreationPayload;
+
+export interface BatchWithdrawItem extends BatchWithdrawPayload {}
 
 export interface BatchWithdrawResult {
   streamId: bigint;
@@ -390,24 +555,38 @@ export interface FeeEstimate {
 }
 
 export type StreamOperationType =
-  | 'create'
-  | 'withdraw'
-  | 'cancel'
-  | 'pause'
-  | 'resume'
-  | 'topUp'
-  | 'transferRecipient'
-  | 'batchWithdraw';
+  | "create"
+  | "withdraw"
+  | "cancel"
+  | "pause"
+  | "resume"
+  | "topUp"
+  | "transferRecipient"
+  | "batchWithdraw";
 
 export type StreamOperation =
   | StreamOperationType
-  | { type: 'create'; params?: CreateStreamParams }
-  | { type: 'withdraw'; streamId?: bigint | string; amount?: bigint }
-  | { type: 'cancel'; streamId?: bigint | string }
-  | { type: 'pause'; streamId?: bigint | string }
-  | { type: 'resume'; streamId?: bigint | string }
-  | { type: 'topUp'; streamId?: bigint | string; amount?: bigint }
-  | { type: 'transferRecipient'; streamId?: bigint | string; newRecipient?: string }
-  | { type: 'batchWithdraw'; items?: BatchWithdrawItem[] }
+  | { type: "create"; params?: CreateStreamParams }
+  | { type: "withdraw"; streamId?: bigint | string; amount?: bigint }
+  | { type: "cancel"; streamId?: bigint | string }
+  | { type: "pause"; streamId?: bigint | string }
+  | { type: "resume"; streamId?: bigint | string }
+  | { type: "topUp"; streamId?: bigint | string; amount?: bigint }
+  | {
+      type: "transferRecipient";
+      streamId?: bigint | string;
+      newRecipient?: string;
+    }
+  | { type: "batchWithdraw"; items?: BatchWithdrawItem[] }
   | { type: string; [key: string]: unknown };
 
+/**
+ * Human-readable breakdown of remaining stream duration.
+ */
+export interface DurationBreakdown {
+  days: number;
+  hours: number;
+  minutes: number;
+  seconds: number;
+  totalSeconds: number;
+}

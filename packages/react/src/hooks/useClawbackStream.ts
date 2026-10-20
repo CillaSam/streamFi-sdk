@@ -73,6 +73,15 @@ export function useClawbackStream(
     setState({ isPending: true, error: null, reclaimedAmount: null, txHash: null });
 
     try {
+      const streamInfo = await client.streams.get(streamId);
+      if (streamInfo && !streamInfo.clawbackEnabled) {
+        const err = new Error(
+          'This stream\'s token does not have the clawback flag enabled. The transaction would revert.',
+        );
+        setState({ isPending: false, error: err, reclaimedAmount: null, txHash: null });
+        throw err;
+      }
+
       const reclaimedAmount = await client.streams.clawback(streamId);
       setState({ isPending: false, error: null, reclaimedAmount, txHash: null });
       return reclaimedAmount;
